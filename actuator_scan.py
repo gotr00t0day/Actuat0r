@@ -5,6 +5,18 @@ import concurrent.futures
 from tqdm import tqdm
 requests.packages.urllib3.disable_warnings()
 
+banner = """
+
+
+   _____          __                __   _______         
+  /  _  \   _____/  |_ __ _______ _/  |_ \   _  \_______ 
+ /  /_\  \_/ ___\   __\  |  \__  \\   __\/  /_\  \_  __ \
+/    |    \  \___|  | |  |  // __ \|  |  \  \_/   \  | \/
+\____|__  /\___  >__| |____/(____  /__|   \_____  /__|   
+        \/     \/                \/             \/ by c0d3Ninja   
+
+"""
+
 args = argparse.ArgumentParser()
 args.add_argument("-u", "--url", type=str, required=True)
 args.add_argument("-w", "--wordlist", type=str)
@@ -209,6 +221,7 @@ def scan(url: str, threads=10) -> list:
     return results
 
 if __name__ == "__main__":
+    print(f"{banner}\n")
     print(f"{Fore.CYAN}Scanning {args.url} for Spring Boot Actuator endpoints...{Fore.WHITE}")
     
     all_results = []
