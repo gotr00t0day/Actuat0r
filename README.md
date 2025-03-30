@@ -2,7 +2,6 @@
 
 A high-performance, multi-threaded scanner for detecting exposed Spring Boot Actuator endpoints. This tool helps security professionals identify potentially vulnerable management interfaces that could expose sensitive application data or functionality.
 
-![Spring Boot Actuator Scanner](https://img.shields.io/badge/Spring-Scanner-brightgreen)
 ![Python 3.7+](https://img.shields.io/badge/Python-3.7+-blue)
 ![License MIT](https://img.shields.io/badge/License-MIT-green)
 
