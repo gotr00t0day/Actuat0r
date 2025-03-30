@@ -32,8 +32,8 @@ When left exposed, these endpoints can be leveraged by attackers to gain detaile
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/springactuator-scanner.git
-cd springactuator-scanner
+git clone https://github.com/yourusername/Actuat0r.git
+cd Actuat0r
 
 # Install required dependencies
 pip install -r requirements.txt
