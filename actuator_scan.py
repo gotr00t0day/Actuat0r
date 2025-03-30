@@ -1,12 +1,16 @@
-from colorama import Fore
+from colorama import Fore, init, ansi
 import requests
 import argparse
 import concurrent.futures
+import threading
 from tqdm import tqdm
 import urllib.parse
 import sys
 import os
+import time
 
+# Initialize colorama with autoreset=True
+init(autoreset=True)
 
 banner = r"""
 
@@ -112,27 +116,58 @@ def generate_encoded_variations(endpoint):
     
     return variations
 
-# Wordlist
-def wordlist(file: str) -> list:
-    with open(file, 'r') as f:
-        dirs = [x.strip() for x in f.readlines()]
-        return dirs
-
 # Try finding directory and filenames to use for actuator endpoints
 def check_endpoint(url, endpoint):
     s = requests.Session()
     try:
-        full_url = f"{url}/{endpoint}" if not endpoint.startswith('/') else f"{url}{endpoint}"
+        # Fix URL construction to avoid double slashes
+        if endpoint.startswith('/'):
+            endpoint = endpoint[1:]  # Remove leading slash from endpoint
+        
+        # Ensure URL doesn't end with a slash before joining
+        if url.endswith('/'):
+            url = url[:-1]  # Remove trailing slash from URL
+            
+        full_url = f"{url}/{endpoint}"
+        
+        # First try HEAD request
         r = s.head(full_url, verify=False, timeout=5)
         if r.status_code == 200:
             return full_url
-        # Also try with GET for endpoints that might not respond to HEAD
+            
+        # If HEAD fails, try GET request
         r = s.get(full_url, verify=False, timeout=5)
         if r.status_code == 200:
             return full_url
     except Exception:
         pass
     return None
+
+# Function to create a fixed status bar at the bottom of the terminal
+class FixedStatusBar:
+    def __init__(self, total, desc=""):
+        # Create a progress bar that stays at the bottom
+        self.pbar = tqdm(total=total, desc=desc, leave=True, position=0)
+        
+    def update(self, n=1):
+        # Update progress bar directly for each endpoint
+        self.pbar.update(n)
+        
+    def print_above(self, message):
+        # Print the message above the progress bar
+        tqdm.write(message)
+        
+    def close(self):
+        self.pbar.close()
+
+def wordlist(file: str) -> list:
+    try:
+        with open(file, 'r') as f:
+            dirs = [x.strip() for x in f.readlines()]
+            return dirs
+    except Exception as e:
+        print(f"{Fore.RED}Error reading wordlist file: {e}{Fore.WHITE}")
+        sys.exit(1)
 
 def dirbrute_endpoints(url: str, file: str, threads=10, bypass=False) -> list:
     endpoints = wordlist(file)
@@ -148,29 +183,63 @@ def dirbrute_endpoints(url: str, file: str, threads=10, bypass=False) -> list:
         all_endpoints = endpoints
         print(f"{Fore.CYAN}Brute forcing endpoints with {threads} threads...{Fore.WHITE}")
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-        future_to_endpoint = {executor.submit(check_endpoint, url, endpoint): endpoint for endpoint in all_endpoints}
-        
-        with tqdm(total=len(all_endpoints), desc="Scanning endpoints") as pbar:
+    # Create a set to track endpoints we've already shown in verbose mode
+    scanned_endpoints = set()
+    
+    # Create a status bar - limit maximum displayed threads to avoid overwhelming tqdm
+    display_threads = min(threads, 10)
+    
+    # Use a lock to prevent concurrent progress bar updates
+    update_lock = threading.Lock()
+    
+    with tqdm(total=len(all_endpoints), desc="Scanning endpoints", leave=True) as pbar:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+            future_to_endpoint = {executor.submit(check_endpoint, url, endpoint): endpoint for endpoint in all_endpoints}
+            
             for future in concurrent.futures.as_completed(future_to_endpoint):
                 endpoint = future_to_endpoint[future]
                 try:
+                    # Print endpoint being scanned if verbose mode is enabled (only once per endpoint)
+                    if args.verbose and endpoint not in scanned_endpoints:
+                        # Fix URL construction for display
+                        display_url = url
+                        display_endpoint = endpoint
+                        
+                        if display_endpoint.startswith('/'):
+                            display_endpoint = display_endpoint[1:]
+                            
+                        if display_url.endswith('/'):
+                            display_url = display_url[:-1]
+                            
+                        tqdm.write(f"{Fore.BLUE}Scanning: {display_url}/{display_endpoint}{Fore.WHITE}")
+                        scanned_endpoints.add(endpoint)
+                    
                     result = future.result()
                     if result:
                         results.append(result)
-                        print(f"{Fore.GREEN}Found: {result}{Fore.WHITE}")
+                        tqdm.write(f"{Fore.GREEN}Found: {result}{Fore.WHITE}")
                 except Exception as e:
                     if args.verbose:
-                        print(f"{Fore.RED}Error checking {endpoint}: {e}{Fore.WHITE}")
+                        tqdm.write(f"{Fore.RED}Error checking {endpoint}: {e}{Fore.WHITE}")
                 finally:
-                    pbar.update(1)
+                    with update_lock:
+                        pbar.update(1)
     
     return results
 
 def check_endpoint_for_scan(base_url, endpoint):
     s = requests.Session()
     try:
-        full_url = f"{base_url}{endpoint}"
+        # Fix URL construction to avoid double slashes
+        if endpoint.startswith('/'):
+            endpoint = endpoint[1:]  # Remove leading slash from endpoint
+        
+        # Ensure URL doesn't end with a slash before joining
+        if base_url.endswith('/'):
+            base_url = base_url[:-1]  # Remove trailing slash from URL
+            
+        full_url = f"{base_url}/{endpoint}"
+        
         r = s.get(full_url, verify=False, timeout=5)
         if r.status_code == 200:
             return full_url
@@ -179,6 +248,9 @@ def check_endpoint_for_scan(base_url, endpoint):
     return None
 
 def check_endpoints(url: str) -> tuple:
+    if args.verbose:
+        print(f"{Fore.CYAN}Checking if {url} is accessible...{Fore.WHITE}")
+    
     # Store the original protocol
     protocol = "https://" if url.startswith("https://") else "http://"
     
@@ -202,91 +274,162 @@ def check_endpoints(url: str) -> tuple:
         
     check_api_subdomain = f"{protocol}api.{url_api}"
     
+    if args.verbose:
+        print(f"{Fore.CYAN}Trying base URL: {protocol}{url_api}{Fore.WHITE}")
+    
     s = requests.Session()
 
     try:
         r = s.get(f"{protocol}{url_api}", verify=False, timeout=5)
         if r.status_code == 200:
+            if args.verbose:
+                print(f"{Fore.GREEN}Successfully connected to {protocol}{url_api} (Status: {r.status_code}){Fore.WHITE}")
             return True, f"{protocol}{url_api}"
+        else:
+            if args.verbose:
+                print(f"{Fore.YELLOW}Received status code {r.status_code} from {protocol}{url_api}{Fore.WHITE}")
     except Exception as e:
         if args.verbose:
-            print(f"Error checking base domain: {e}")
+            print(f"{Fore.RED}Error checking base domain: {e}{Fore.WHITE}")
         pass
+    
+    if args.verbose:
+        print(f"{Fore.CYAN}Trying API endpoint: {url}/api{Fore.WHITE}")
     
     try:
         r_api = s.get(f"{url}/api", verify=False, timeout=5)
         if r_api.status_code == 200:
+            if args.verbose:
+                print(f"{Fore.GREEN}Successfully connected to {url}/api (Status: {r_api.status_code}){Fore.WHITE}")
             return True, f"{url}/api"
+        else:
+            if args.verbose:
+                print(f"{Fore.YELLOW}Received status code {r_api.status_code} from {url}/api{Fore.WHITE}")
     except Exception as e:
         if args.verbose:
-            print(f"Error checking API endpoint: {e}")
+            print(f"{Fore.RED}Error checking API endpoint: {e}{Fore.WHITE}")
         pass
-
-    return False, None
+    
+    # If we reach here, neither the base URL nor the API endpoint is accessible
+    # Let's force continue even if we couldn't verify accessibility
+    if args.verbose:
+        print(f"{Fore.YELLOW}Could not verify site accessibility. Continuing with scan anyway...{Fore.WHITE}")
+    return True, url
 
 def scan(url: str, threads=10, bypass=False) -> list:
     success, endpoint_url = check_endpoints(url)
     results = []
     
-    if success:
-        if "api." in endpoint_url:
-            all_endpoints = []
+    if args.verbose:
+        print(f"{Fore.CYAN}Scanning URL: {endpoint_url}{Fore.WHITE}")
+    
+    # Check if the URL contains v1 or v2
+    contains_version = "v1" in endpoint_url.lower() or "v2" in endpoint_url.lower()
+    
+    # We'll always scan with the actuator endpoints first
+    all_endpoints = []
+    
+    # Generate encoded variations if bypass mode is enabled
+    if bypass:
+        print(f"{Fore.CYAN}Checking endpoints with WAF bypass (URL encoding) using {threads} threads...{Fore.WHITE}")
+        for endpoint in actuator_endpoints:
+            all_endpoints.extend(generate_encoded_variations(endpoint))
+    else:
+        print(f"{Fore.CYAN}Checking endpoints with {threads} threads...{Fore.WHITE}")
+        all_endpoints = actuator_endpoints
+    
+    # Create a set to track endpoints we've already shown in verbose mode
+    scanned_endpoints = set()
+    
+    # Use a lock to prevent concurrent progress bar updates
+    update_lock = threading.Lock()
+    
+    with tqdm(total=len(all_endpoints), desc="Scanning actuator endpoints", leave=True) as pbar:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+            future_to_endpoint = {executor.submit(check_endpoint_for_scan, endpoint_url, endpoint): endpoint 
+                                 for endpoint in all_endpoints}
             
-            # Generate encoded variations if bypass mode is enabled
-            if bypass:
-                print(f"{Fore.CYAN}Checking API subdomain endpoints with WAF bypass (URL encoding) using {threads} threads...{Fore.WHITE}")
-                for endpoint in actuator_endpoints:
-                    all_endpoints.extend(generate_encoded_variations(endpoint))
-            else:
-                print(f"{Fore.CYAN}Checking API subdomain endpoints with {threads} threads...{Fore.WHITE}")
-                all_endpoints = actuator_endpoints
-            
-            with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-                future_to_endpoint = {executor.submit(check_endpoint_for_scan, endpoint_url, endpoint): endpoint 
-                                     for endpoint in all_endpoints}
-                
-                with tqdm(total=len(all_endpoints), desc="Scanning actuator endpoints") as pbar:
-                    for future in concurrent.futures.as_completed(future_to_endpoint):
-                        try:
-                            result = future.result()
-                            if result:
-                                results.append(result)
-                                print(f"{Fore.GREEN}Found: {result}{Fore.WHITE}")
-                        except Exception as e:
-                            endpoint = future_to_endpoint[future]
-                            if args.verbose:
-                                print(f"{Fore.RED}Error checking {endpoint}: {e}{Fore.WHITE}")
-                        finally:
-                            pbar.update(1)
+            for future in concurrent.futures.as_completed(future_to_endpoint):
+                endpoint = future_to_endpoint[future]
+                try:
+                    # Print endpoint being scanned if verbose mode is enabled (only once per endpoint)
+                    if args.verbose and endpoint not in scanned_endpoints:
+                        # Fix URL construction for display
+                        display_url = endpoint_url
+                        display_endpoint = endpoint
+                        
+                        if display_endpoint.startswith('/'):
+                            display_endpoint = display_endpoint[1:]
                             
-        elif "/api" in endpoint_url:
-            all_endpoints = []
-            
-            # Generate encoded variations if bypass mode is enabled
-            if bypass:
-                print(f"{Fore.CYAN}Checking API endpoints with WAF bypass (URL encoding) using {threads} threads...{Fore.WHITE}")
-                for endpoint in api_endpoints:
-                    all_endpoints.extend(generate_encoded_variations(endpoint))
-            else:
-                print(f"{Fore.CYAN}Checking API endpoints with {threads} threads...{Fore.WHITE}")
-                all_endpoints = api_endpoints
-            
+                        if display_url.endswith('/'):
+                            display_url = display_url[:-1]
+                            
+                        tqdm.write(f"{Fore.BLUE}Scanning: {display_url}/{display_endpoint}{Fore.WHITE}")
+                        scanned_endpoints.add(endpoint)
+                        
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                        tqdm.write(f"{Fore.GREEN}Found: {result}{Fore.WHITE}")
+                except Exception as e:
+                    if args.verbose:
+                        tqdm.write(f"{Fore.RED}Error checking {endpoint}: {e}{Fore.WHITE}")
+                finally:
+                    with update_lock:
+                        pbar.update(1)
+    
+    # Additionally, check for API-specific endpoints if we found an API endpoint
+    if success and not contains_version and ("api." in endpoint_url or "/api" in endpoint_url):
+        if args.verbose:
+            print(f"{Fore.CYAN}Found API endpoint: {Fore.GREEN}{endpoint_url}{Fore.CYAN}, scanning additional API-specific paths...{Fore.WHITE}")
+        
+        # Check for API-specific endpoints
+        api_all_endpoints = []
+        
+        # Generate encoded variations if bypass mode is enabled
+        if bypass:
+            print(f"{Fore.CYAN}Checking API endpoints with WAF bypass (URL encoding) using {threads} threads...{Fore.WHITE}")
+            for endpoint in api_endpoints:
+                api_all_endpoints.extend(generate_encoded_variations(endpoint))
+        else:
+            print(f"{Fore.CYAN}Checking API endpoints with {threads} threads...{Fore.WHITE}")
+            api_all_endpoints = api_endpoints
+        
+        # Create a set to track endpoints we've already shown in verbose mode
+        api_scanned_endpoints = set()
+        
+        with tqdm(total=len(api_all_endpoints), desc="Scanning API endpoints", leave=True) as pbar:
             with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
                 future_to_endpoint = {executor.submit(check_endpoint_for_scan, endpoint_url, endpoint): endpoint 
-                                     for endpoint in all_endpoints}
+                                     for endpoint in api_all_endpoints}
                 
-                with tqdm(total=len(all_endpoints), desc="Scanning API endpoints") as pbar:
-                    for future in concurrent.futures.as_completed(future_to_endpoint):
-                        try:
-                            result = future.result()
-                            if result:
-                                results.append(result)
-                                print(f"{Fore.GREEN}Found: {result}{Fore.WHITE}")
-                        except Exception as e:
-                            endpoint = future_to_endpoint[future]
-                            if args.verbose:
-                                print(f"{Fore.RED}Error checking {endpoint}: {e}{Fore.WHITE}")
-                        finally:
+                for future in concurrent.futures.as_completed(future_to_endpoint):
+                    endpoint = future_to_endpoint[future]
+                    try:
+                        # Print endpoint being scanned if verbose mode is enabled (only once per endpoint)
+                        if args.verbose and endpoint not in api_scanned_endpoints:
+                            # Fix URL construction for display
+                            display_url = endpoint_url
+                            display_endpoint = endpoint
+                            
+                            if display_endpoint.startswith('/'):
+                                display_endpoint = display_endpoint[1:]
+                                
+                            if display_url.endswith('/'):
+                                display_url = display_url[:-1]
+                                
+                            tqdm.write(f"{Fore.BLUE}Scanning: {display_url}/{display_endpoint}{Fore.WHITE}")
+                            api_scanned_endpoints.add(endpoint)
+                            
+                        result = future.result()
+                        if result:
+                            results.append(result)
+                            tqdm.write(f"{Fore.GREEN}Found: {result}{Fore.WHITE}")
+                    except Exception as e:
+                        if args.verbose:
+                            tqdm.write(f"{Fore.RED}Error checking {endpoint}: {e}{Fore.WHITE}")
+                    finally:
+                        with update_lock:
                             pbar.update(1)
     
     return results
