@@ -73,6 +73,18 @@ Comprehensive scan:
 python3 actuator_scan.py -u https://target-application.com -w wordlists/spring-paths.txt -t 20
 ```
 
+Waf bypass
+
+```bash
+python actuator_scan.py -u https://target-application.com -b
+```
+
+Scans with all option
+
+```bash
+python actuator_scan.py -u https://target-application.com -w wordlists/spring-paths.txt -t 20 -b -v
+```
+
 ## Options
 
 | Flag | Description |
