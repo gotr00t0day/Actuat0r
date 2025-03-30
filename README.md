@@ -32,7 +32,7 @@ When left exposed, these endpoints can be leveraged by attackers to gain detaile
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/Actuat0r.git
+git clone https://github.com/gotr00t0day/Actuat0r.git
 cd Actuat0r
 
 # Install required dependencies
