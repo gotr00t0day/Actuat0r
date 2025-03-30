@@ -9,7 +9,7 @@ import sys
 import os
 import time
 
-# Initialize colorama with autoreset=True
+
 init(autoreset=True)
 
 banner = r"""
