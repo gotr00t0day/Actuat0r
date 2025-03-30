@@ -80,13 +80,11 @@ actuator_endpoints = [
     "/actuator/trace"
 ]
 
-# Wordlist
 def wordlist(file: str) -> list:
     with open(file, 'r') as f:
         dirs = [x.strip() for x in f.readlines()]
         return dirs
 
-# Try finding directory and filenames to use for actuator endpoints
 def check_endpoint(url, endpoint):
     s = requests.Session()
     try:
@@ -132,10 +130,8 @@ def check_endpoint_for_scan(base_url, endpoint):
     return None
 
 def check_endpoints(url: str) -> tuple:
-    # Store the original protocol
     protocol = "https://" if url.startswith("https://") else "http://"
     
-    # Extract domain without protocol
     if "https://" in url:
         url_api = url.replace("https://", "")
     elif "http://" in url:
